@@ -33,4 +33,5 @@ supabase/.temp/
 # Local DB seed (Optional: if you have sensitive data in seed)
 # supabase/seed.sql
 
-# Test files
+frontend/node_modules
+frontend/.env.local
