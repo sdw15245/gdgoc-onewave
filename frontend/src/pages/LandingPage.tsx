@@ -1,8 +1,51 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton } from "@clerk/clerk-react";
+import { SignedIn, SignedOut, SignInButton, SignUpButton, UserButton, useAuth } from "@clerk/clerk-react";
 
 const LandingPage = () => {
+  const { getToken, signOut, isSignedIn } = useAuth();
+
+  useEffect(() => {
+    const validateAuth = async () => {
+      // Only validate if user thinks they are signed in
+      if (!isSignedIn) return;
+
+      try {
+        const token = await getToken();
+        if (!token) {
+          // If signed in but no token, something is wrong
+          await signOut();
+          return;
+        }
+
+        const baseUrl = import.meta.env.VITE_API_BASE_URL;
+        const response = await fetch(`${baseUrl}/functions/v1/auth`, {
+           method: 'POST',
+           headers: {
+             'Authorization': `Bearer ${token}`,
+             'Content-Type': 'application/json',
+             'apikey': import.meta.env.VITE_SUPABASE_KEY,
+           },
+           credentials: 'include',
+        });
+        
+        if (!response.ok) {
+           console.warn("LandingPage: Valid auth session not confirmed by backend. Signing out.");
+           await signOut();
+        }
+      } catch (error) {
+         console.error("LandingPage Auth Check Error", error);
+         // Optional: decide if network error should sign out. 
+         // For strict security requested by user:
+         await signOut(); 
+      }
+    };
+
+    if (isSignedIn) {
+      validateAuth();
+    }
+  }, [isSignedIn, getToken, signOut]);
+
   return (
     <div className="relative min-h-screen flex flex-col overflow-x-hidden bg-brand-bg text-brand-text font-sans">
       <header className="sticky top-0 z-50 w-full bg-white/70 backdrop-blur-xl border-b border-slate-100">

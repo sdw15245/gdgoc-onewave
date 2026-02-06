@@ -1,7 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from "@clerk/clerk-react";
 
 const DashboardPage = () => {
+  const { getToken, signOut } = useAuth();
+  const navigate = useNavigate();
   const [selectedTab, setSelectedTab] = useState('videos');
   const [darkMode, setDarkMode] = useState(false);
   const [selectedTheme, setSelectedTheme] = useState('tech');
@@ -12,6 +15,54 @@ const DashboardPage = () => {
 
   // API State
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isAuthValidating, setIsAuthValidating] = useState(true);
+
+  // Auth Sync
+  useEffect(() => {
+    const syncAuth = async () => {
+      try {
+        const token = await getToken();
+        // If no token yet, and we are in SignedIn, it might be loading or error.
+        // But for syncAuth, we need token.
+        if (!token) {
+             // Strict enforcement: No token means no valid session
+             console.warn("No token found, signing out.");
+             await signOut();
+             navigate('/');
+             return; 
+        }
+
+        console.log("Syncing auth with backend...");
+        const baseUrl = import.meta.env.VITE_API_BASE_URL;
+        const response = await fetch(`${baseUrl}/functions/v1/auth`, {
+           method: 'POST',
+           headers: {
+             'Authorization': `Bearer ${token}`,
+             'Content-Type': 'application/json',
+             'apikey': import.meta.env.VITE_SUPABASE_KEY,
+           },
+           credentials: 'include',
+        });
+        
+        if (response.ok) {
+           console.log("Auth sync successful");
+           setIsAuthValidating(false); // Enable UI
+        } else {
+           console.error("Auth sync failed", response.status);
+           alert("Authentication validation failed. Please log in again.");
+           await signOut();
+           navigate('/');
+        }
+      } catch (error) {
+         console.error("Auth sync error", error);
+         alert("Authentication error. Please check your connection.");
+         await signOut(); 
+         navigate('/');
+      }
+    };
+    
+    syncAuth();
+  }, [getToken, signOut, navigate]);
 
   // Toggle Dark Mode
   useEffect(() => {
@@ -22,7 +73,20 @@ const DashboardPage = () => {
     }
   }, [darkMode]);
 
-  const [assets] = useState([
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+
+  if (isAuthValidating) {
+    return (
+        <div className="h-screen w-screen flex items-center justify-center bg-slate-50">
+            <div className="flex flex-col items-center gap-4">
+                <div className="size-12 rounded-full border-4 border-slate-200 border-t-primary animate-spin"></div>
+                <p className="text-slate-500 font-bold text-sm animate-pulse">Verifying Access...</p>
+            </div>
+        </div>
+    );
+  }
+
+  const [assets, setAssets] = useState([
     { id: 1, name: 'Senior_Resume.pdf', date: 'Edited 2 days ago', type: 'doc', color: 'rose' },
     { id: 2, name: 'Auth_Module_Refactor.js', date: 'Edited 5 hours ago', type: 'code', color: 'amber' },
     { id: 3, name: 'Product_Portfolio.pdf', date: 'Edited 1 week ago', type: 'doc', color: 'indigo' },
@@ -77,7 +141,74 @@ const DashboardPage = () => {
     setSelectedAssets(selectedAssets.filter(a => a.id !== assetId));
   };
 
-  // API Integration
+  // File Upload Handlers
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const token = await getToken();
+      const formData = new FormData();
+      formData.append('file', file);
+      // Determine type based on extension (simple heuristic)
+      const isCode = file.name.match(/\.(js|ts|py|rs|go|java|cpp)$/i);
+      if (isCode) {
+        formData.append('type', 'code');
+      } else {
+        formData.append('type', 'resume'); // Default to resume/doc
+      }
+
+      // Optimistic UI update (optional) or wait for response
+      // Let's verify with alert first as per previous pattern or just simple loading
+      const response = await fetch('/api/portfolio', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          // Content-Type is set automatically for FormData
+        },
+        body: formData,
+      });
+
+      if (response.ok || response.status === 201) {
+        const newAsset = await response.json();
+        // Fallback for mock environment if response is empty or not as expected
+        const safeAsset = newAsset && newAsset.id ? newAsset : {
+           id: Date.now(),
+           name: file.name,
+           date: 'Just now',
+           type: isCode ? 'code' : 'doc',
+           color: 'emerald'
+        };
+        setAssets([safeAsset, ...assets]);
+        alert("Asset uploaded successfully!");
+      } else {
+         console.warn("Upload failed (expected in mock):", response.status);
+         // Simulate success for demo if API fails
+         const mockAsset = {
+           id: Date.now(),
+           name: file.name,
+           date: 'Just now',
+           type: isCode ? 'code' : 'doc',
+           color: 'emerald'
+        };
+        setAssets([mockAsset, ...assets]);
+        alert("Asset upload simulated (API not ready).");
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      alert("Failed to upload asset.");
+    } finally {
+      // Reset input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
   const handleGenerate = async () => {
     if (selectedAssets.length === 0) {
       alert("Please upload or select at least one asset to generate a video.");
@@ -94,10 +225,12 @@ const DashboardPage = () => {
 
       console.log("Sending generation request:", payload);
 
+      const token = await getToken();
       const response = await fetch('/api/video/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify(payload),
       });
@@ -119,9 +252,17 @@ const DashboardPage = () => {
     }
   };
 
-
   return (
     <div className={`flex h-screen overflow-hidden ${darkMode ? 'bg-slate-900 text-white' : 'bg-workspace-bg text-slate-800'} font-display transition-colors duration-300`}>
+      {/* Hidden File Input */}
+      <input 
+        type="file" 
+        ref={fileInputRef} 
+        onChange={handleFileChange} 
+        className="hidden" 
+        accept=".pdf,.doc,.docx,.txt,.md,.js,.ts,.py,.java,.c,.cpp,.rs,.go"
+      />
+
       {/* App Sidebar */}
       <aside className={`w-20 flex flex-col items-center py-8 gap-10 border-r shrink-0 z-20 shadow-sm transition-colors duration-300 ${darkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
         <Link to="/" className="size-12 bg-primary rounded-2xl flex items-center justify-center text-white shadow-lg shadow-primary/20" title="Vidifolio">
@@ -186,7 +327,10 @@ const DashboardPage = () => {
               </button>
             )}
             {selectedTab === 'projects' && (
-              <button className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl text-sm font-bold shadow-xl shadow-primary/20 hover:bg-indigo-700 transition-all hover:-translate-y-0.5 active:translate-y-0">
+              <button 
+                onClick={handleUploadClick}
+                className="flex items-center gap-2 px-5 py-2.5 bg-primary text-white rounded-xl text-sm font-bold shadow-xl shadow-primary/20 hover:bg-indigo-700 transition-all hover:-translate-y-0.5 active:translate-y-0"
+              >
                 <span className="material-symbols-outlined text-xl">upload_file</span> Upload Asset
               </button>
             )}
@@ -361,7 +505,10 @@ const DashboardPage = () => {
                 <div className="p-7">
                 <div className="flex items-center justify-between mb-7">
                     <h2 className={`text-xl font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>Project Assets</h2>
-                    <button className="text-primary hover:bg-primary/10 p-1.5 rounded-lg transition-colors">
+                    <button 
+                      onClick={handleUploadClick}
+                      className="text-primary hover:bg-primary/10 p-1.5 rounded-lg transition-colors"
+                    >
                     <span className="material-symbols-outlined font-bold">add</span>
                     </button>
                 </div>
